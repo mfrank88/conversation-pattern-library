@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Grace 2.0 Flow Library Prototype</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Flow sections">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">G</span>
+          <div>
+            <p class="eyebrow">Grace 2.0</p>
+            <h1>Flow Library</h1>
+          </div>
+        </div>
+
+        <label class="search-label" for="searchInput">Search</label>
+        <input id="searchInput" class="search-input" type="search" placeholder="Find a step, decision or phrase" />
+
+        <nav id="sectionNav" class="section-nav"></nav>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div>
+            <p id="sectionKicker" class="eyebrow">Prototype</p>
+            <h2 id="sectionTitle">Grace 2.0 Flow Library</h2>
+          </div>
+          <div class="toolbar" aria-label="Page controls">
+            <button id="overviewButton" class="icon-button" type="button" title="Show overview" aria-label="Show overview">⌂</button>
+            <button id="copyButton" class="icon-button" type="button" title="Copy current section" aria-label="Copy current section">⧉</button>
+            <a class="icon-button link-button" href="https://docs.google.com/document/d/1_xTalbZ1vDqIn5HPyA8DuVbp4k14yAAlsUuLJdZERE0/edit?usp=drivesdk" title="Open source document" aria-label="Open source document">↗</a>
+          </div>
+        </header>
+
+        <section id="overview" class="overview"></section>
+
+        <section class="content-shell">
+          <div id="content" class="content"></div>
+          <aside id="outline" class="outline" aria-label="Section outline"></aside>
+        </section>
+      </main>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

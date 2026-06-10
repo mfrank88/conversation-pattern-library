@@ -1,0 +1,1436 @@
+﻿Grace 2.0 Flow Library
+Purpose: one working library for Grace voice flows, shared rules, SMS copy and open questions.
+Status: corrected draft for review. Existing flow structure is preserved: summary, dialogue standards, steps, decisions, sample dialogue, end states and divider lines.
+Flow Index
+Use the document outline to jump between sections. Each flow keeps the same step-and-decision format as the source flows.
+
+
+Active Flows
+* Verify Appointment: helps a caller check upcoming booked appointment details and request a text with appointment details.
+* Cancel Appointment: helps a caller cancel an upcoming appointment, offers reschedule first when the appointment is in scheduling scope and confirms cancellation.
+* Schedule Appointment: helps a caller book a new appointment for themselves, including triage, slot search, lock and confirmation.
+* Reschedule Appointment: helps a caller move an existing appointment, including entry from Cancel with selected appointment context.
+
+
+Shared Components
+* Shared Rules: openings, authentication, proxy callers, global escalation, survey logic, transfer logic and end states.
+* SMS Spec: message templates, character rules, fallback rules and send failure handling.
+* Open Items: items that should stay visible until compliance, product or engineering confirms them.
+
+
+Cross-Flow Routing
+* Verify can route to Schedule when no upcoming appointment exists and the caller wants to book.
+* Cancel can route to Reschedule after the appointment is selected and confirmed, if the appointment is in Phase 1 scheduling scope.
+* Schedule, Reschedule, Cancel and Verify can route to one another after the closing check if the caller has another task.
+* Any flow can route to Care Navigator through DECISION L when out of scope, unclear after allowed retry, after hours, system failure, proxy caller in V1 or caller asks for a person.
+* Schedule and Reschedule can route to EMERGENCY END when Dash triage returns an emergency response. Wording is pending compliance review.
+SHARED RULES
+These rules apply across all Grace voice flows unless a flow states a tighter rule.
+
+
+Voice And Tone
+* Grace does not use first-person pronouns in conversation: no "I," "me" or "my."
+* The opening line is the one allowed exception because Grace identifies itself by name.
+* Avoid "I understand," "I'm sorry," "I hope," feeling claims and medical advice.
+* Keep language around seventh-grade reading level.
+* Lead with what Grace can do.
+* Use "you" and "your" when speaking to the caller.
+
+
+Standard Openings
+
+
+No sub-intent from Genesys:
+"This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+
+
+Verify intent captured:
+"This is Grace, an AI-powered assistant. Ready to check on that appointment, or were you calling about something else?"
+
+
+Cancel intent captured:
+"This is Grace, an AI-powered assistant. Ready to help cancel an appointment, or was the call about something else?"
+
+
+Schedule intent captured:
+"This is Grace, an AI-powered assistant. Ready to help with that new appointment, or was the call about something else?"
+
+
+Reschedule intent captured:
+"This is Grace, an AI-powered assistant. Ready to help reschedule that appointment, or was the call about something else?"
+
+
+Authentication
+Primary authentication prompt:
+"To pull up your record, what's your name and date of birth?"
+
+
+* Authentication: name and DOB collected in one turn. DOB accepted via speech or DTMF (keypad). DTMF supports 6-digit (MMDDYY) or 8-digit (MMDDYYYY) entry. No readback on first attempt. Two retries allowed. First retry reads back captured values (no match) or re-explains input options (wrong format) before re-asking. Second retry states the information isn't coming up and re-asks for date of birth only, with both input modes offered. Three failed attempts total escalates to a Care Navigator.
+* Multi-patient phone scenarios are out of V1 self-service scope. Go to DECISION L.
+
+
+Proxy Caller Or Patient Switch
+V1 rule:
+* If the caller says the call is for another patient at session start, go to DECISION L.
+* If the caller switches to another patient after authentication, exit the current step and trigger the On Behalf Of flow once it ships.
+* Until that flow ships, transfer to a Care Navigator.
+* Carry forward only call metadata for the new patient subject. Do not carry forward the original patient context.
+
+
+Sample dialogue:
+"Calls for another patient need a Care Navigator. Connecting you now."
+
+
+Global Escalation
+At any point, if the caller asks for a person using the approved trigger set, route immediately to DECISION L.
+
+
+Approved trigger set for V1:
+* Agent
+* Operator
+* Help
+
+
+Also route to DECISION L for distress, repeated frustration, unclear intent after allowed retry, unsupported request, system error or workflow dead end.
+
+
+Closing Check - Standard
+
+
+"Is there anything else needed today?"
+
+
+Use the same closing loop across flows:
+* If yes, capture the next intent and route to the matching flow.
+* After that task completes, return to the same flow's closing check.
+* If no, run survey eligibility.
+
+
+Survey Eligibility
+Survey only fires when every task in the session completed cleanly, with no human handoff and no out-of-scope intent.
+
+
+Recommended session flags:
+* completed_task: true after a successful verify, cancellation, booking or reschedule.
+* incomplete_task: true after an abandoned task or unsupported continuation.
+* out_of_scope: true after an unsupported or redirected intent.
+
+
+Survey-eligible closing:
+"Thank you for choosing Ascension, [first name]. To help improve this experience, please share your thoughts in a brief survey. Connecting you now."
+
+
+Non-survey closing:
+"Thank you for choosing Ascension, [first name]."
+
+
+Transfer And After-Hours End States
+DECISION L - Transfer to Care Navigator
+Check if within open hours.
+* If yes, go to ESCALATE-LIVE END.
+* If no, go to ESCALATE-AFTERHOURS END.
+
+
+ESCALATE-LIVE END:
+Sample dialogue:
+"A Care Navigator can help with this. Connecting you now."
+
+
+Pass session context so the Care Navigator does not start over. Include intent, authentication state, selected appointment, appointments returned, slot history, preferences captured, last action taken and triage state when present.
+
+
+ESCALATE-AFTERHOURS END:
+Primary sample dialogue:
+"To finish this, please call back during normal business hours when a Care Navigator can help. Thank you for choosing Ascension."
+
+
+Alternate sample dialogue:
+"This needs help from a Care Navigator. They're available during normal business hours, so please call back at that time. Thank you for choosing Ascension."
+
+
+Emergency Handling
+Schedule and Reschedule use Dash triage.
+* If Dash returns an emergency response, go to EMERGENCY END.
+* Offer emergency care as an option, not a directive.
+* Confirm the caller is safe to continue before any further scheduling action.
+* Final wording is pending compliance review.
+VERIFY APPOINTMENT FLOW
+
+
+SUMMARY
+* Grace opens the call.
+* Grace collects name and date of birth and authenticates the caller in one turn.
+* Use shared authentication, including speech and keypad DOB.
+* Genesys may or may not pass a captured intent to Grace. STEP 1 branches on that signal.
+* Verify is read-only: no booking, locking or modification.
+* SMS is the only outbound action.
+* Dash returns upcoming booked appointments. Behavior branches on appointment count: 0, 1 or 2+.
+* For 2 or 3 appointments, Grace reads each date and asks which the caller wants.
+* For 4 or more, Grace steps through the dates one at a time.
+* Proxy or "on behalf of" scenarios transfer in V1 until the On Behalf Of flow ships.
+* SMS confirmation includes both provider profile link and facility map link for every caller.
+* SMS send failure uses one retry, then verbal fallback.
+* Closing check, survey eligibility and transfer logic use shared rules.
+
+
+DIALOGUE STANDARDS
+* Opening with no sub-intent: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+* Opening with verify intent captured: "This is Grace, an AI-powered assistant. Ready to check on that appointment, or were you calling about something else?"
+* Authentication: "To pull up your record, what's your name and date of birth?"
+* Closing survey-eligible: "Thank you for choosing Ascension, [first name]. To help improve this experience, please share your thoughts in a brief survey. Connecting you now."
+______________
+STEP 1 - Start
+Call routed from Genesys to Grace. Captured intent, if any, is passed.
+
+
+DECISION 0 - Did Genesys capture sub-intent?
+* If yes, go to STEP 1A.
+* If no, go to STEP 1B.
+
+
+STEP 1A - Grace Open With Intent Confirmation
+Sample dialogue: "This is Grace, an AI-powered assistant. Ready to check on that appointment, or were you calling about something else?"
+
+
+DECISION 0A - Caller confirms verify intent?
+* If yes, go to STEP 2.
+* If no and caller redirects to schedule, reschedule or cancel, route to that flow.
+* If no and intent is out of scope, go to DECISION L.
+* If caller says the call is for another patient, go to DECISION L.
+
+
+STEP 1B - Grace Cold Open
+Sample dialogue: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+
+
+STEP 1C - Capture Intent
+Caller states what they need.
+
+
+DECISION 0B - Is the intent verify?
+* If yes, go to STEP 2.
+* If schedule, reschedule or cancel, route to that flow.
+* If out of scope, go to DECISION L.
+* If caller says the call is for another patient, go to DECISION L.
+______________
+STEP 2 - Authentication
+Sample dialogue: "To pull up your record, what's your name and date of birth?"
+DECISION 1 - Matches a single patient record?
+If Yes (single match), go to STEP 3.
+If No match, go to STEP 2B (readback retry).
+If wrong format (DTMF entry doesn't parse as a valid date in either format), go to STEP 2B (format retry).
+If multi-patient phone, go to DECISION L. Per V1 scope, multi-patient phones transfer.
+STEP 2B - First authentication retry (attempt 2)
+Grace reads back what was captured (no-match case) or re-explains the input options (wrong-format case) before re-asking.
+For no-match: "That didn't match a record. The name was [captured name] and the date was [captured date]. Want to try again?"
+For wrong format: "That date didn't come through. Try again. Say the date, or enter 6 digits like 022890, or 8 digits like 02281990."
+If the retry matches a single record, go to STEP 3. If it fails again (no match or invalid format), go to STEP 2C.
+STEP 2C - Second authentication retry (attempt 3)
+Sample dialogue: "Your information isn't coming up. Let's try one more time. You can speak or enter your date of birth on the keypad."
+This attempt re-collects date of birth only. The captured name from the prior attempt is held. No readback. Both speech and DTMF remain accepted. If the attempt matches a single record, go to STEP 3. If it fails, go to DECISION L. No fourth attempt under any condition.
+STEP 3 - Pull Upcoming Appointments
+Retrieve upcoming booked appointments via Dash.
+Sample dialogue: "One moment while the appointments come up."
+
+
+DECISION A - How many upcoming appointments?
+* Zero, go to STEP 4A.
+* One, go to STEP 4B.
+* Two or more, go to STEP 4C.
+______________
+STEP 4 - Appointment Selection
+
+
+STEP 4A - No Upcoming Appointments
+Sample dialogue: "There aren't any upcoming appointments on file. Want to schedule one?"
+* If yes, route to Schedule flow.
+* If no, go to STEP 7.
+
+
+STEP 4B - Single Appointment
+Sample dialogue: "There is one upcoming appointment: [visit type] with Dr. [provider name] at [Facility] on [Day, Date] at [Time]."
+Go to STEP 5.
+
+
+STEP 4C - Multiple Appointments
+For N=2:
+"There are two upcoming appointments. The first is on [Date] and the second is on [Date]. Do you want details on a specific one or both?"
+
+
+For N=3:
+"There are three upcoming appointments. The first is on [Date], the second is on [Date] and the third is on [Date]. Do you want details on a specific one or all of them?"
+
+
+For N=4 or more:
+"There are [N] upcoming appointments. Let's go through them one at a time. The first is on [Date]. Do you want details on this appointment, the next appointment or all appointments?"
+
+
+STEP 4C-i - Step-Through Loop
+Read the next date in the list.
+Sample dialogue: "The next one is on [Date]. Do you want details on this appointment, the next appointment or all appointments?"
+Go to DECISION B.
+
+
+End of list:
+If the caller said "next appointment" and that was the last date in the list:
+"That was the last one. Want details on a specific one or all of them?"
+Go to DECISION B.
+
+
+DECISION B - Caller selects an appointment?
+* If yes, single appointment, share full details: "That appointment is [visit type] with Dr. [provider name] at [Facility] on [Day, Date] at [Time]." Go to STEP 5.
+* If yes, next appointment, go to STEP 4C-i.
+* If yes, all of them, share full details for each in sequence. Go to STEP 5.
+* If escalation signal, go to DECISION L.
+* If unclear, allow one retry. If still unclear, go to DECISION L.
+______________
+STEP 5 - Offer SMS With Appointment Details
+Sample dialogue: "Would you like a text with your appointment details?"
+
+
+DECISION C - Caller accepts SMS?
+* If yes, go to STEP 5A.
+* If no, go to STEP 7.
+
+
+STEP 5A - Confirm Phone Number
+Sample dialogue: "Should it go to the number ending in [last 4 digits]?"
+
+
+DECISION D - Caller confirms the number?
+* If yes, go to STEP 6.
+* If no and caller gives a different number, capture alternate number, then go to STEP 6.
+* If no and caller skips the text, go to STEP 7.
+______________
+STEP 6 - Send SMS
+Trigger SMS to confirmed number using the Verify SMS template. For multiple appointments, send one two-message set per appointment.
+
+
+DECISION SMS-1 - Send successful?
+* If yes, sample dialogue: "Okay, you're all set." Go to STEP 7.
+* If no, go to STEP 6B.
+
+
+STEP 6B - Retry SMS
+Retry once. For two-message sends, retry only the failed message.
+
+
+DECISION SMS-2 - Send successful on retry?
+* If yes, go to STEP 7.
+* If no, go to STEP 6C.
+
+
+STEP 6C - Verbal Fallback
+Recap verbally only the appointment details whose SMS failed.
+Sample dialogue: "The text isn't going through right now. The appointment is on [date] at [time] with [provider_full] at [facility_name]."
+Go to STEP 7.
+______________
+STEP 7 - Closing Check
+Sample dialogue: "Is there anything else needed today?"
+
+
+DECISION E - Anything else?
+* If yes, go to STEP 7B.
+* If no, go to DECISION F.
+
+
+STEP 7B - Capture Next Intent
+Identify the next task and route to the matching flow. After that task is complete, loop back to STEP 7.
+
+
+DECISION F - Survey Eligibility Check
+Survey only fires when every task in the session completed cleanly with no human handoff and no out-of-scope intent.
+* If all requests are complete, go to CLOSE-SURVEY END.
+* Otherwise, go to CLOSE-NO-SURVEY END.
+
+
+DECISION L - Transfer to Care Navigator
+Check if within open hours.
+* If yes, go to ESCALATE-LIVE END.
+* If no, go to ESCALATE-AFTERHOURS END.
+
+
+END
+* CLOSE-SURVEY END: Deliver survey-eligible closing, then transfer to Genesys for survey.
+* CLOSE-NO-SURVEY END: Deliver non-survey closing, then end call. No survey.
+* ESCALATE-LIVE END: Say "A Care Navigator can help with this. Connecting you now." Transfer with session context. No survey.
+* ESCALATE-AFTERHOURS END: Deliver after-hours message. End call. No transfer. No survey.
+CANCEL APPOINTMENT FLOW
+
+
+SUMMARY
+* Grace opens the call. Captured intent from Genesys, if any, determines which open.
+* Authentication uses shared authentication.
+* Pull upcoming appointments from Dash. Window: 90 days, capped at 10.
+* If multiple appointments exist, ask which one. Read back chronologically. Branch on count: 0, 1, 2-3, 4-10 or more than 10.
+* Offer reschedule before cancellation only when the selected appointment is in Phase 1 scheduling scope.
+* Capture cancellation reason verbally with a short reason line. If caller declines or deflects, move on.
+* Submit cancellation, then confirm with a spoken caution about related appointments.
+* Offer SMS confirmation only. No email.
+* SMS send failure uses one retry, then verbal fallback.
+* Closing check, survey eligibility and transfer logic use shared rules.
+
+
+DIALOGUE STANDARDS
+* Opening with no sub-intent: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+* Opening with cancel intent captured: "This is Grace, an AI-powered assistant. Ready to help cancel an appointment, or was the call about something else?"
+* Authentication: "To pull up your record, what's your name and date of birth?"
+* Closing survey-eligible: "Thank you for choosing Ascension, [first name]. To help improve this experience, please share your thoughts in a brief survey. Connecting you now."
+______________
+STEP 1 - Start
+Call routed from Genesys to Grace. Captured intent, if any, is passed via SIP parameters.
+
+
+DECISION 0 - Did Genesys capture sub-intent?
+* If yes, go to STEP 1A.
+* If no, go to STEP 1B.
+
+
+STEP 1A - Grace Open With Intent Confirmation
+Sample dialogue: "This is Grace, an AI-powered assistant. Ready to help cancel an appointment, or was the call about something else?"
+
+
+DECISION 0A - Caller confirms cancel intent?
+* If yes, go to STEP 2.
+* If no and caller redirects to schedule, reschedule or verify, route to that flow.
+* If no and intent is out of scope, go to DECISION L.
+* If caller says the call is for another patient, go to DECISION L.
+
+
+STEP 1B - Grace Cold Open
+Sample dialogue: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+
+
+STEP 1C - Capture Intent
+Caller states what they need.
+
+
+DECISION 0B - Is the intent cancel?
+* If yes, go to STEP 2.
+* If schedule, reschedule or verify, route to that flow.
+* If out of scope, go to DECISION L.
+______________
+STEP 2 - Authentication
+Sample dialogue: "To pull up your record, what's your name and date of birth?"
+DECISION 1 - Matches a single patient record?
+If Yes (single match), go to STEP 3.
+If No match, go to STEP 2B (readback retry).
+If wrong format (DTMF entry doesn't parse as a valid date in either format), go to STEP 2B (format retry).
+If multi-patient phone, go to DECISION L. Per V1 scope, multi-patient phones transfer.
+STEP 2B - First authentication retry (attempt 2)
+Grace reads back what was captured (no-match case) or re-explains the input options (wrong-format case) before re-asking.
+For no-match: "That didn't match a record. The name was [captured name] and the date was [captured date]. Want to try again?"
+For wrong format: "That date didn't come through. Try again. Say the date, or enter 6 digits like 022890, or 8 digits like 02281990."
+If the retry matches a single record, go to STEP 3. If it fails again (no match or invalid format), go to STEP 2C.
+STEP 2C - Second authentication retry (attempt 3)
+Sample dialogue: "Your information isn't coming up. Let's try one more time. You can speak or enter your date of birth on the keypad."
+This attempt re-collects date of birth only. The captured name from the prior attempt is held. No readback. Both speech and DTMF remain accepted. If the attempt matches a single record, go to STEP 3. If it fails, go to DECISION L. No fourth attempt under any condition.
+STEP 3 - Pull Upcoming Appointments
+Retrieve from Dash. Window: 90 days, capped at 10. Hold date, time, provider, location and appointment ID chronologically. Sierra should know whether more than 10 appointments exist beyond the cap.
+
+
+DECISION A - How many upcoming appointments?
+* Zero, go to STEP 3B.
+* One, go to STEP 4A.
+* Two or three, go to STEP 4B.
+* Four to ten with no truncation, go to STEP 4C.
+* Ten with more available, go to STEP 4D.
+
+
+STEP 3B - No Upcoming Appointments
+Sample dialogue: "Nothing upcoming is on file. Want to book a new appointment?"
+* If yes, route to Schedule flow.
+* If no, go to STEP 13.
+______________
+STEP 4 - Identify The Appointment To Cancel
+
+
+STEP 4A - Single Appointment Read-Back
+Sample dialogue: "There's one appointment on file: [Day, Date] at [Time] with Dr. [name] at [Facility]. Is that the one to cancel?"
+
+
+DECISION B1 - Caller confirms?
+* If yes, go to STEP 5.
+* If no, go to STEP 13B. The caller likely meant a different intent.
+
+
+STEP 4B - Two Or Three Appointments Read-Back
+Sample dialogue: "There are [N] upcoming. The first is [Day, Date] at [Time] with Dr. [name] at [Facility]. The second is [Day, Date] at [Time] with Dr. [name] at [Facility]. [If three: The third is [Day, Date] at [Time] with Dr. [name] at [Facility].] Which one needs to be canceled?"
+Go to DECISION B2.
+
+
+STEP 4C - Four To Ten Appointments Read-Back
+Sample dialogue: "There are [N] upcoming appointments. The first three are: [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. Which one needs to be canceled, or should the rest be read out?"
+Go to DECISION B2.
+
+
+STEP 4D - More Than Ten Appointments Read-Back
+Sample dialogue: "There are more than ten upcoming appointments. The first three are: [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. Which one needs to be canceled? A doctor's name or date can help find it faster if it's not in this list."
+Go to DECISION B2.
+
+
+DECISION B2 - Caller identifies the appointment?
+* If yes, clear match to one already read, go to STEP 5.
+* If caller asks for more, read the next three. Repeat the question.
+* If caller gives narrowing info, filter the list and re-read the matching subset.
+* In the more-than-ten case, narrowing may trigger a re-pull from Dash.
+* If still unclear after the full list is read, go to DECISION L.
+______________
+STEP 5 - Confirm Selection
+Sample dialogue: "Just to confirm, the appointment on [Day, Date] at [Time] with Dr. [name] at [Facility]. Is that right?"
+
+
+DECISION C - Caller confirms?
+* If yes, go to STEP 6.
+* If no, loop back to STEP 4B, 4C or 4D based on count.
+
+
+STEP 6 - Offer Reschedule First
+DECISION D0 - Selected appointment specialty is in Phase 1 scheduling scope?
+* If yes, continue to DECISION D.
+* If no, skip reschedule offer and go to STEP 7.
+
+
+DECISION D - Caller wants to reschedule?
+Sample dialogue: "Before canceling, would rescheduling work instead?"
+* If yes, route to Reschedule flow with selected appointment context loaded.
+* If no, go to STEP 7.
+______________
+STEP 7 - Capture Cancellation Reason
+Sample dialogue: "What's your reason for canceling? This helps improve Ascension's services."
+
+
+DECISION E - Did the caller share a reason?
+* If yes, capture the reason as free text. Map to a known reason code if wording matches.
+* If no, caller declines, deflects or would rather not share, move on.
+
+
+Sample dialogue for declined reason: "Not a problem. Let's move on."
+Go to STEP 8.
+
+
+STEP 8 - Submit Cancellation
+Sample dialogue: "One moment while that's canceled."
+Submit via Dash.
+
+
+DECISION F - Cancellation result?
+* Confirmed, go to STEP 9.
+* Appointment cannot be canceled here, already canceled or already checked in, go to STEP 8B.
+* Any other error or timeout, go to DECISION L with full session context.
+
+
+STEP 8B - Un-Cancellable Appointment
+Sample dialogue: "This appointment needs a Care Navigator to sort out. Please hold."
+Go to DECISION L.
+
+
+STEP 9 - Confirm Cancellation
+Sample dialogue: "The appointment on [Day, Date] at [Time] with Dr. [name] is canceled. Related appointments like imaging, labs or specialist visits should be canceled or rescheduled separately."
+Go to STEP 10.
+______________
+STEP 10 - Offer SMS Confirmation
+Sample dialogue: "A text confirmation can be sent. Send it now?"
+
+
+DECISION G - Caller accepts SMS?
+* If yes, go to STEP 11.
+* If no, go to STEP 13.
+
+
+STEP 11 - Phone Number Confirmation
+Sample dialogue: "Send it to the number ending in [last 4]?"
+
+
+DECISION H - Number on file is correct?
+* If yes, go to STEP 12.
+* If no, go to STEP 11B.
+
+
+STEP 11B - Capture New Number
+Sample dialogue: "What's the best number for the text?"
+Capture, then go to STEP 12.
+
+
+STEP 12 - Send SMS
+Trigger SMS using the Cancel SMS template.
+
+
+DECISION SMS-1 - Send successful?
+* If yes, go to STEP 13.
+* If no, go to STEP 12B.
+
+
+STEP 12B - Retry SMS
+Retry once.
+
+
+DECISION SMS-2 - Send successful on retry?
+* If yes, go to STEP 13.
+* If no, go to STEP 12C.
+
+
+STEP 12C - Verbal Fallback
+Sample dialogue: "The text isn't going through right now. The cancellation is confirmed: the appointment on [date] at [time] with [provider_full] is canceled."
+Go to STEP 13.
+______________
+STEP 13 - Closing Check
+Sample dialogue: "Is there anything else needed today?"
+
+
+DECISION J - Anything else?
+* If yes, go to STEP 13B.
+* If no, go to DECISION K.
+
+
+STEP 13B - Capture Next Intent
+Identify next task and route to matching flow. After the next task completes, loop back to STEP 13.
+
+
+DECISION K - Survey Eligibility Check
+Survey only fires when the call ends cleanly: cancellation completed, no abandoned tasks and no out-of-scope routing.
+* If yes, go to CLOSE-SURVEY END.
+* If no, go to CLOSE-NO-SURVEY END.
+
+
+DECISION L - Transfer to Care Navigator
+Check if within open hours.
+* If yes, go to ESCALATE-LIVE END.
+* If no, go to ESCALATE-AFTERHOURS END.
+
+
+END
+* CLOSE-SURVEY END: Deliver survey-eligible closing, then transfer to Genesys for survey.
+* CLOSE-NO-SURVEY END: Deliver non-survey closing, then end call. No survey.
+* ESCALATE-LIVE END: Say "A Care Navigator can help with this. Connecting you now." Transfer with session context. No survey.
+* ESCALATE-AFTERHOURS END: Deliver after-hours message. End call. No transfer. No survey.
+SCHEDULE APPOINTMENT FLOW
+
+
+SUMMARY
+* Grace opens the call. Captured intent from Genesys, if any, determines which open.
+* Authentication uses shared authentication with spoken or keypad DOB when enabled.
+* Pull last 10 appointments via Dash to identify recurring providers, specialties and visit patterns.
+* Three caller entry patterns: reason for visit, provider or specialty.
+* If the resolved reason has has_triage true, walk the Dash decision tree.
+* Emergency outcomes route to EMERGENCY END.
+* Phase 1 launch: Primary Care only. Phase 2 adds Cardiovascular once Phase 1 metrics support expansion.
+* Office vs telehealth is filtered silently by Dash eligible-for-telehealth flag.
+* Slot search window is 7 days by default. Acute reasons may require booking within 48 hours.
+* Slot lock holds for 15 minutes. Release lock if caller backs out before booking.
+* SMS branching based on first visit is removed. Every Schedule SMS includes both facility map link and provider profile link.
+* Slot-search elimination reason text is internal only. Log it, but do not speak it to callers.
+* Closing check, survey eligibility and transfer logic use shared rules.
+
+
+DIALOGUE STANDARDS
+* Opening with no sub-intent: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+* Opening with schedule intent captured: "This is Grace, an AI-powered assistant. Ready to help with that new appointment, or was the call about something else?"
+* Authentication: "To pull up your record, what's your name and date of birth?"
+* Personalization beat: "Thank you, [first name]."
+* Closing survey-eligible: "Thank you for choosing Ascension, [first name]. To help improve this experience, please share your thoughts in a brief survey. Connecting you now."
+______________
+GLOBAL RULES
+Use Shared Rules for escalation trigger words, patient switch, proxy caller handling, authentication, survey eligibility and transfer.
+______________
+STEP 1 - Start
+Call routed from Genesys to Grace. Captured intent, if any, is passed via SIP parameters.
+
+
+DECISION 0 - Did Genesys capture sub-intent?
+* If yes, go to STEP 1A.
+* If no, go to STEP 1B.
+
+
+STEP 1A - Grace Open With Intent Confirmation
+Sample dialogue: "This is Grace, an AI-powered assistant. Ready to help with that new appointment, or was the call about something else?"
+
+
+DECISION 0A - Caller confirms schedule intent?
+* If yes and scheduling for self, go to STEP 2.
+* If no and redirects to reschedule, cancel or verify, route to that flow.
+* If call is for another patient, go to DECISION L.
+* If out of scope, go to DECISION L.
+
+
+STEP 1B - Grace Cold Open
+Sample dialogue: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+
+
+STEP 1C - Capture Intent
+Parse for intent and subject.
+
+
+DECISION 0B - Is the intent schedule?
+* If yes, go to STEP 2.
+* If reschedule, cancel or verify, route to that flow.
+* If out of scope, go to DECISION L.
+______________
+STEP 2 - Authentication
+Sample dialogue: "To pull up your record, what's your name and date of birth?"
+DECISION 1 - Matches a single patient record?
+If Yes (single match), go to STEP 3.
+If No match, go to STEP 2B (readback retry).
+If wrong format (DTMF entry doesn't parse as a valid date in either format), go to STEP 2B (format retry).
+If multi-patient phone, go to DECISION L. Per V1 scope, multi-patient phones transfer.
+STEP 2B - First authentication retry (attempt 2)
+Grace reads back what was captured (no-match case) or re-explains the input options (wrong-format case) before re-asking.
+For no-match: "That didn't match a record. The name was [captured name] and the date was [captured date]. Want to try again?"
+For wrong format: "That date didn't come through. Try again. Say the date, or enter 6 digits like 022890, or 8 digits like 02281990."
+If the retry matches a single record, go to STEP 3. If it fails again (no match or invalid format), go to STEP 2C.
+STEP 2C - Second authentication retry (attempt 3)
+Sample dialogue: "Your information isn't coming up. Let's try one more time. You can speak or enter your date of birth on the keypad."
+This attempt re-collects date of birth only. The captured name from the prior attempt is held. No readback. Both speech and DTMF remain accepted. If the attempt matches a single record, go to STEP 3. If it fails, go to DECISION L. No fourth attempt under any condition.
+STEP 3 - Pull Appointment History
+Retrieve the last 10 appointments via Dash. Identify recurring providers, specialties and visit patterns. Hold for prioritization in slot search.
+
+
+STEP 4 - Open-Ended Intent Question
+Sample dialogue: "What's the reason for your visit, the name of the doctor or the type of specialist?"
+
+
+Reason for the visit is captured first, before any service-type discussion.
+
+
+Content-Acknowledgment Beats
+If the caller volunteers context, Grace gives a brief acknowledgment beat without claiming a feeling.
+* Symptom: "Oh, you have a headache. Let's find an opening for you."
+* Constraint: "A family trip. Let's find a time that works around it."
+* Urgency: "Seems urgent, so let's look at the earliest openings."
+
+
+Forbidden: "I'm sorry," "I hope," "I understand," "That sounds awful," "Feel better," "Have fun" or any phrase that claims a feeling.
+
+
+DECISION A - What did the caller provide?
+* Reason, go to STEP 5A.
+* Provider, go to STEP 5B.
+* Specialty, go to STEP 5C.
+* Two or more, go to STEP 5D.
+______________
+STEP 5 - Capture Reason, Provider Or Specialty
+
+
+STEP 5A - Reason Captured
+Map reason to specialty via Dash. Go to DECISION SC.
+
+
+STEP 5B - Provider Captured
+Sample dialogue: "Okay. To find the right opening with Dr. [name], what's the reason for the visit?"
+Capture reason. Go to DECISION SC.
+
+
+STEP 5C - Specialty Captured
+Sample dialogue: "Okay. What's the reason for needing a [specialty]?"
+Capture reason. Go to DECISION SC.
+
+
+STEP 5D - Multi-Slot Captured
+Confirm what the caller already said and ask only for what is missing. Go to DECISION SC.
+
+
+DECISION SC - Service line in scope?
+* Phase 1: Primary Care only. Anything else routes to DECISION L.
+* Phase 2: Cardiovascular added once Phase 1 metrics support expansion.
+
+
+STEP 5T - Triage Check
+Look up has_triage on the resolved reason. If true, retrieve Dash decision tree and go to DECISION T. If false, skip to STEP 6.
+
+
+DECISION T - Triage outcome?
+* Emergency response, deliver emergency message and go to EMERGENCY END.
+* Self-eligible, go to STEP 6.
+* Not self-eligible, go to DECISION L.
+______________
+STEP 6 - Apply Facility Scope Filter
+Narrow candidate facilities using:
+* Phone-number-serviced facility list.
+* Facilities from the patient's existing appointments.
+
+
+STEP 7 - Match Against Appointment History
+Prioritize seen-before providers. Pre-load patterns when available.
+
+
+STEP 7P - Provider Selection Ladder
+* Start with the patient's preferred provider when the reason matches.
+* If no slots, fall back to the practice the patient called.
+* If no slots there, fall back to ministry-wide.
+* If a MyCare Team-linked alternate exists, prefer that before ministry-wide.
+
+
+DECISION B - Slots found?
+* If yes, go to STEP 8.
+* If no, go to STEP 7B.
+
+
+STEP 7B - Broaden Search
+Drop the provider filter. Search by reason or specialty across candidate facilities.
+* If slots are found, go to STEP 8.
+* If no slots after broadening, go to NO-INVENTORY END.
+______________
+STEP 8 - Provide Next Available
+Apply the telehealth-eligible flag silently. Only mention telehealth if the reason is flagged eligible-for-telehealth and the patient brings it up, or the provider only offers telehealth. Otherwise default to office visit.
+
+
+Sample dialogue: "The next opening is [Day, Date] at [Time] with Dr. [name] at [Facility]. Want that one?"
+
+
+DECISION C - Caller accepts next available?
+* If yes, go to STEP 12.
+* If no, go to STEP 9.
+
+
+STEP 9 - Collect Preferences
+Sample dialogue: "No problem. What day or time would work better?"
+Capture day-of-week and time-of-day in one turn if both are offered.
+
+
+STEP 10 - Search By Preferences
+Filter by stated day-of-week and time-of-day within a 7-day window. Acute reasons may require booking within 48 hours per Dash rules.
+
+
+Internal guardrail: never speak Dash elimination-reason text to the caller. Log elimination reasons for analysis, then use neutral dialogue.
+
+
+DECISION D - Slots match preferences?
+* If yes, go to STEP 11.
+* If no, go to STEP 10B.
+
+
+STEP 10B - No Match For Preferences
+Sample dialogue: "Nothing's open on [stated day]. Is there another day or time that would work?"
+Capture and loop back to STEP 10. Hard rule: do not loop more than twice. After two failed rounds, go to STEP 13.
+______________
+STEP 11 - Offer Applicable Slots
+Present three slots at a time.
+Sample dialogue: "There's [Day] at [Time1], [Time2] or [Time3]. Which works?"
+
+
+DECISION E - Caller selects a slot?
+* If yes, go to STEP 12.
+* If no, same day and different time within preference, go to STEP 11B.
+* If no and escalation signal beyond global triggers, go to DECISION L.
+* If no and new preference, loop back to STEP 9.
+
+
+STEP 11B - Re-Look Same Preference
+Sample dialogue: "Got it. The next [stated day] after that is [Date] at [Time]. Want that one?"
+Loop back to DECISION E.
+______________
+STEP 12 - Lock And Book
+Lock the slot via Dash. Lock holds for 15 minutes.
+Sample dialogue: "One moment while the appointment is finalized."
+
+
+On success:
+Sample dialogue: "The appointment with Dr. [name] is set for [Day, Date] at [Time] at [Facility]."
+
+
+If caller backs out before booking, release the lock.
+
+
+DECISION G - Lock succeeded?
+* If yes, go to STEP 14.
+* If no, slot taken before lock, go to STEP 12B.
+
+
+STEP 12B - Lock Failure
+On first lock failure, offer one alternative slot.
+Sample dialogue: "That opening was just taken. There's another at [Day, Date] at [Time]. Want that one?"
+* If accepted, loop back to STEP 12.
+* If rejected, go to DECISION L. Do not retry the same slot.
+
+
+On second consecutive lock failure:
+Sample dialogue: "That one was just taken too. A Care Navigator can find something that works."
+Go to DECISION L. Do not offer a third alternative.
+
+
+Hard rule: maximum two total lock attempts per session.
+______________
+STEP 13 - Pivot Offer
+Used after two failed preference rounds.
+Suggest a different provider or facility based on history and proximity.
+
+
+Sample dialogue: "Dr. [name] is fully booked the next 90 days. Dr. [alt-name] is also a [specialty] at [facility]. Want to look at openings with Dr. [alt-name]?"
+
+
+DECISION F - Caller accepts pivot?
+* If yes, loop back to STEP 10 with new provider or facility.
+* If no, go to DECISION L.
+______________
+STEP 14 - Offer SMS Confirmation
+Corrected from old 14A-14D branching. Every caller gets both facility map link and provider profile link.
+
+
+Sample dialogue: "A confirmation can be sent by text with a map to the facility and a link to [provider_full]'s profile. Send it now?"
+
+
+DECISION I - Caller accepts SMS?
+* If yes, go to STEP 14P.
+* If no, go to STEP 16.
+
+
+STEP 14P - Confirm Phone Number
+Sample dialogue: "Sending to the number ending in [last 4]. Sound right?"
+* If yes, go to STEP 15.
+* If no, capture the new number, then go to STEP 15.
+
+
+STEP 15 - Send SMS
+Trigger SMS using the Schedule two-message template.
+
+
+DECISION SMS-1 - Send successful?
+* If yes, sample dialogue: "Okay, you're all set." Go to STEP 16.
+* If no, go to STEP 15B.
+
+
+STEP 15B - Retry SMS
+Retry once. Retry only failed message or messages.
+
+
+DECISION SMS-2 - Send successful on retry?
+* If yes, go to STEP 16.
+* If no, go to STEP 15C.
+
+
+STEP 15C - Verbal Fallback
+Sample dialogue: "The text isn't going through right now. The appointment is set: [date] at [time] with [provider_full] at [facility_name]."
+Go to STEP 16.
+______________
+STEP 16 - Closing Check
+Sample dialogue: "Is there anything else needed today?"
+
+
+DECISION J - Anything else?
+* If yes, go to STEP 16B.
+* If no, go to DECISION K.
+
+
+STEP 16B - Capture Next Intent
+Identify next task and route to matching flow. After that task completes, loop back to STEP 16.
+
+
+DECISION K - Survey Eligibility Check
+Survey only fires when every task in the session completed cleanly with no human handoff and no out-of-scope intent.
+* If all requests are complete, go to CLOSE-SURVEY END.
+* Otherwise, go to CLOSE-NO-SURVEY END.
+
+
+DECISION L - Transfer to Care Navigator
+Check if within open hours.
+* If yes, go to ESCALATE-LIVE END.
+* If no, go to ESCALATE-AFTERHOURS END.
+
+
+END
+* CLOSE-SURVEY END: Deliver survey-eligible closing, then transfer to Genesys for survey.
+* CLOSE-NO-SURVEY END: Deliver non-survey closing, then end call. No survey.
+* ESCALATE-LIVE END: Say "A Care Navigator can help with this. Connecting you now." Transfer with session context. No survey.
+* ESCALATE-AFTERHOURS END: Deliver after-hours message. End call. No transfer. No survey.
+* NO-INVENTORY END: No openings in 90 days or no care team alternate available. Offer Care Navigator connection. If caller declines, go to STEP 16.
+* EMERGENCY END: Emergency response from Dash triage. Wording pending compliance review.
+RESCHEDULE APPOINTMENT FLOW
+
+
+SUMMARY
+* Grace opens the call. Captured intent from Genesys, if any, determines which open.
+* Authentication uses shared authentication with spoken or keypad DOB when enabled.
+* Pull upcoming appointments from Dash. Window: 90 days, capped at 10.
+* If multiple appointments exist, ask which one. Read back chronologically. Branch on count: 0, 1, 2-3, 4-10 or more than 10.
+* Two entry paths: standard entry where caller picks appointment in this flow, and entry from Cancel where appointment context is already loaded.
+* Scope and eligibility check after appointment selection uses Dash reschedulability flag.
+* Date and time are primary levers. Default to same provider, same reason, same location and same telehealth flag.
+* If Dash returns triage required, drop into Schedule-style triage with a softening line.
+* Slot search window is 7 days by default. Acute reasons may require booking within 48 hours.
+* Slot lock holds for 15 minutes. Release lock if caller backs out before submission.
+* After two failed preference rounds with same provider, pivot to a care team alternate before escalating.
+* Reschedule executes as a single atomic call via Dash. If API fails, original appointment stays in place.
+* SMS uses two messages with facility map link and provider profile link for every caller.
+* SMS send failure uses one retry, then verbal fallback.
+* Closing check, survey eligibility and transfer logic use shared rules.
+
+
+DIALOGUE STANDARDS
+* Opening with no sub-intent: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+* Opening with reschedule intent captured: "This is Grace, an AI-powered assistant. Ready to help reschedule that appointment, or was the call about something else?"
+* Authentication: "To pull up your record, what's your name and date of birth?"
+* Reconfirm from Cancel: "Okay. The appointment with Dr. [name] on [Day, Date] at [Time]. Reschedule that one?"
+* Triage softening line: "A few quick questions are needed before that gets rescheduled."
+______________
+STEP 1 - Start
+Call routed from Genesys to Grace. Captured intent, if any, is passed via SIP parameters. If call enters with appointment context from Cancel, go to STEP 4R. Otherwise, go to DECISION 0.
+
+
+DECISION 0 - Did Genesys capture sub-intent?
+* If yes, go to STEP 1A.
+* If no, go to STEP 1B.
+
+
+STEP 1A - Grace Open With Intent Confirmation
+Sample dialogue: "This is Grace, an AI-powered assistant. Ready to help reschedule that appointment, or was the call about something else?"
+
+
+DECISION 0A - Caller confirms reschedule intent?
+* If yes and rescheduling for self, go to STEP 2.
+* If no and redirects to schedule, cancel or verify, route to that flow.
+* If call is for another patient, go to DECISION L.
+* If out of scope, go to DECISION L.
+
+
+STEP 1B - Grace Cold Open
+Sample dialogue: "This is Grace, an AI-powered assistant ready to help with scheduling, rescheduling, canceling and verifying appointments. What do you need to do today?"
+
+
+STEP 1C - Capture Intent
+Parse for intent and subject.
+
+
+DECISION 0B - Is the intent reschedule?
+* If yes, go to STEP 2.
+* If schedule, cancel or verify, route to that flow.
+* If out of scope, go to DECISION L.
+
+
+DECISION 0C - Proxy caller declared at session start?
+Per V1 scope, transfer.
+Sample dialogue: "Calls for another patient need a Care Navigator. Connecting you now."
+Go to DECISION L.
+______________
+STEP 2 - Authentication
+Sample dialogue: "To pull up your record, what's your name and date of birth?"
+DECISION 1 - Matches a single patient record?
+If Yes (single match), go to STEP 3.
+If No match, go to STEP 2B (readback retry).
+If wrong format (DTMF entry doesn't parse as a valid date in either format), go to STEP 2B (format retry).
+If multi-patient phone, go to DECISION L. Per V1 scope, multi-patient phones transfer.
+STEP 2B - First authentication retry (attempt 2)
+Grace reads back what was captured (no-match case) or re-explains the input options (wrong-format case) before re-asking.
+For no-match: "That didn't match a record. The name was [captured name] and the date was [captured date]. Want to try again?"
+For wrong format: "That date didn't come through. Try again. Say the date, or enter 6 digits like 022890, or 8 digits like 02281990."
+If the retry matches a single record, go to STEP 3. If it fails again (no match or invalid format), go to STEP 2C.
+STEP 2C - Second authentication retry (attempt 3)
+Sample dialogue: "Your information isn't coming up. Let's try one more time. You can speak or enter your date of birth on the keypad."
+This attempt re-collects date of birth only. The captured name from the prior attempt is held. No readback. Both speech and DTMF remain accepted. If the attempt matches a single record, go to STEP 3. If it fails, go to DECISION L. No fourth attempt under any condition.
+STEP 3 - Pull Upcoming Appointments
+Retrieve upcoming appointments via Dash. Window: 90 days, capped at 10.
+
+
+DECISION A - How many upcoming appointments?
+* Zero, go to STEP 4Z.
+* One, go to STEP 4O.
+* 2 or 3, go to STEP 4S.
+* 4 to 10, go to STEP 4M.
+* More than 10, go to STEP 4L.
+______________
+STEP 4 - Appointment Selection
+Each branch reads appointments back chronologically and asks which one to reschedule. STEP 4R is used only when appointment context is already loaded from Cancel.
+
+
+STEP 4Z - Zero Appointments
+Sample dialogue: "Nothing's showing up for you in the next 90 days. Want to set up a new appointment instead, or talk to a Care Navigator about an older one?"
+* If set up new, route to Schedule flow.
+* If Care Navigator or unclear, go to DECISION L.
+* If no, go to STEP 13.
+
+
+STEP 4O - One Appointment
+Sample dialogue: "There's one appointment coming up: [Day, Date] at [Time] with Dr. [name] at [Facility]. Reschedule that one?"
+* If yes, go to STEP 5.
+* If no, go to DECISION L.
+
+
+STEP 4S - Two Or Three Appointments
+Read each appointment back chronologically.
+Sample dialogue: "There are [two/three] appointments coming up: [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. Which one needs to be rescheduled?"
+Go to DECISION B.
+
+
+STEP 4M - Four To Ten Appointments
+Read the first three chronologically.
+Sample dialogue: "There are [count] appointments coming up. The first three are: [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. Which one needs to be rescheduled? A doctor's name or date can help find it faster if it's not in this list."
+Go to DECISION B.
+
+
+STEP 4L - More Than Ten Appointments
+Sample dialogue: "There are more than ten appointments coming up. The first three are: [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. [Day, Date] at [Time] with Dr. [name] at [Facility]. Which one needs to be rescheduled? A doctor's name or date can help find it faster if it's not in this list."
+Go to DECISION B.
+
+
+DECISION B - Caller identifies the appointment?
+* If yes, clear match to one already read, go to STEP 5.
+* If caller asks for more, read next three. Repeat the question.
+* If caller gives narrowing info, filter list and re-read matching subset.
+* In more-than-ten case, narrowing may trigger a re-pull from Dash.
+* If still unclear after full list is read, go to DECISION L.
+
+
+STEP 4R - Reconfirm From Cancel
+Sample dialogue: "Okay. The appointment with Dr. [name] on [Day, Date] at [Time]. Reschedule that one?"
+* If yes, go to STEP 6.
+* If no, go to STEP 4 and branch on count from cached list.
+______________
+STEP 5 - Confirm Selection
+Sample dialogue: "Just to confirm, the appointment on [Day, Date] at [Time] with Dr. [name] at [Facility]. Rescheduling that one?"
+
+
+DECISION C - Caller confirms?
+* If yes, go to STEP 6.
+* If no, loop back to STEP 4S, 4M or 4L based on count.
+
+
+STEP 6 - Reschedule Eligibility And Triage Check
+One Dash call determines whether appointment is reschedulable and whether triage answers from original booking carry forward.
+
+
+DECISION D - Can this appointment be rescheduled here?
+* If no, go to STEP 6Z.
+* If yes, go to DECISION D1.
+
+
+STEP 6Z - Cannot Reschedule Here
+Sample dialogue: "This one needs a Care Navigator to reschedule."
+Go to DECISION L with reason context.
+
+
+DECISION D1 - Triage required?
+* If no, go to STEP 7.
+* If yes, go to STEP 6A.
+
+
+STEP 6A - Drop Into Triage
+Sample dialogue: "Additional information is needed before that gets rescheduled."
+Walk through Dash triage tree. Mirror Schedule triage handling.
+
+
+DECISION D2 - Triage outcome?
+* Standard scheduling result, go to STEP 7.
+* Emergency severity, go to EMERGENCY END.
+* Acute result, carry acute flag into STEP 7 and honor 48-hour rule.
+______________
+STEP 7 - Collect Preferences
+Date and time are primary levers. Default to same provider, same reason, same location and same telehealth flag as original booking.
+Sample dialogue: "What day or time would work better?"
+Capture day-of-week and time-of-day in one turn if both are offered. If neither is offered, search broadly within the 7-day window.
+
+
+STEP 8 - Search Same-Provider Slots
+Filter by stated day-of-week and time-of-day within a 7-day window from now, or 48-hour window if acute flag is set. Same provider, same reason, same location and same telehealth flag as original booking.
+
+
+Internal guardrail: never speak Dash elimination-reason text to the caller. Log elimination reasons for analysis, then use neutral dialogue.
+
+
+DECISION E - Slots match preferences?
+* If yes, go to STEP 9.
+* If no, go to STEP 8B.
+
+
+STEP 8B - No Match For Preferences
+Sample dialogue: "Nothing's open with Dr. [name] on [stated day]. Is there another day or time that would work?"
+Capture and loop back to STEP 8. Hard rule: do not loop more than twice. After two failed rounds, go to STEP 10.
+
+
+STEP 9 - Offer Applicable Slots
+Present three slots at a time.
+Sample dialogue: "There's [Day] at [Time1], [Time2] or [Time3] with Dr. [name]. Which works?"
+
+
+DECISION F - Caller selects a slot?
+* If yes, go to STEP 11.
+* If no, same day and different time within preference, go to STEP 9B.
+* If no and escalation signal beyond global triggers, go to DECISION L.
+* If no and new preference, loop back to STEP 7.
+* If caller asks for a different doctor, go to STEP 10.
+
+
+STEP 9B - Re-Look Same Preference
+Sample dialogue: "Got it. The next [stated day] after that is [Date] at [Time] with Dr. [name]. Want that one?"
+Loop back to DECISION F.
+______________
+STEP 10 - Care Team Pivot
+Used after two failed preference rounds or caller request. Suggest a care team alternate based on Dash care team links for original provider. Same facility, same reason.
+
+
+If Dash returns no care team alternate, go to NO-INVENTORY END.
+
+
+Sample dialogue: "Dr. [name] is fully booked the next 90 days. Dr. [alt-name] is on the same care team at [Facility]. Want to look at openings with Dr. [alt-name]?"
+
+
+DECISION G - Caller accepts care team pivot?
+* If yes, loop back to STEP 6 with new provider context.
+* If no, go to NO-INVENTORY END.
+
+
+STEP 11 - Lock And Reschedule
+Lock the new slot via Dash. Lock holds for 15 minutes.
+Sample dialogue: "One moment while that's updated."
+Submit reschedule through Dash reschedule API.
+
+
+On success:
+Sample dialogue: "The appointment with Dr. [name] is rescheduled for [Day, Date] at [Time]."
+
+
+If caller backs out before submission, release lock. If caller wants a different slot, go to STEP 9. If caller no longer wants to reschedule, go to STEP 13.
+
+
+DECISION H - Reschedule result?
+* Confirmed, go to STEP 12.
+* Slot taken between lock and submission, go to STEP 11B.
+* Any other error, go to STEP 11C.
+
+
+STEP 11B - Lock Failure
+On first lock failure, offer one alternative slot.
+Sample dialogue: "That opening was just taken. There's another at [Day, Date] at [Time] with Dr. [name]. Want that one?"
+* If accepted, loop back to STEP 11.
+* If rejected, go to DECISION L.
+
+
+On second consecutive lock failure:
+Sample dialogue: "That one was just taken too. A Care Navigator can find something that works."
+Go to DECISION L. Original appointment stays in place throughout.
+
+
+STEP 11C - Reschedule API Failure
+Sample dialogue: "This one needs a Care Navigator to finish up. The original appointment is still in place."
+Go to DECISION L with full session context.
+______________
+STEP 12 - Offer SMS Confirmation
+Sample dialogue: "A confirmation can be sent by text with a map to the facility and a link to [provider_full]'s profile. Send it now?"
+
+
+DECISION I - Caller accepts SMS?
+* If yes, go to STEP 12A.
+* If no, go to STEP 13.
+
+
+STEP 12A - Confirm Phone Number
+Sample dialogue: "Sending to the number ending in [last 4]. Sound right?"
+* If yes, go to STEP 12B.
+* If no, capture new number, then go to STEP 12B.
+
+
+STEP 12B - Send SMS
+Trigger SMS using the Reschedule two-message template. Treat both messages as a set: success means both delivered.
+
+
+DECISION SMS-1 - Send successful?
+* If yes, sample dialogue: "Okay, you're all set." Go to STEP 13.
+* If no, go to STEP 12C.
+
+
+STEP 12C - Retry SMS
+Retry once. Retry only failed message or messages.
+
+
+DECISION SMS-2 - Send successful on retry?
+* If yes, go to STEP 13.
+* If no, go to STEP 12D.
+
+
+STEP 12D - Verbal Fallback
+Sample dialogue: "The text isn't going through right now. The appointment is rescheduled for [date] at [time] with [provider_full] at [facility_name]."
+Go to STEP 13.
+______________
+STEP 13 - Closing Check
+Sample dialogue: "Is there anything else needed today?"
+
+
+DECISION J - Anything else?
+* If yes, go to STEP 13B.
+* If no, go to DECISION K.
+
+
+STEP 13B - Capture Next Intent
+Identify next task and route to matching flow. After that task is complete, loop back to STEP 13.
+
+
+DECISION K - Survey Eligibility Check
+Survey only fires when every task in the session completed cleanly with no human handoff and no out-of-scope intent.
+* If all requests are complete, go to CLOSE-SURVEY END.
+* Otherwise, go to CLOSE-NO-SURVEY END.
+
+
+DECISION L - Transfer to Care Navigator
+Check if within open hours.
+* If yes, go to ESCALATE-LIVE END.
+* If no, go to ESCALATE-AFTERHOURS END.
+
+
+END
+* CLOSE-SURVEY END: Deliver survey-eligible closing, then transfer to Genesys for survey.
+* CLOSE-NO-SURVEY END: Deliver non-survey closing, then end call. No survey.
+* ESCALATE-LIVE END: Say "A Care Navigator can help with this. Connecting you now." Transfer with session context. No survey.
+* ESCALATE-AFTERHOURS END: Deliver after-hours message. End call. No transfer. No survey.
+* NO-INVENTORY END: No openings in 90 days or no care team alternate available. Offer Care Navigator connection. If caller declines, go to STEP 13.
+* EMERGENCY END: Emergency response from Dash triage. Wording pending compliance review.
+SMS SPEC
+SMS Dialogue Spec - Verify, Cancel, Schedule, Reschedule - corrected library draft
+
+
+Shared Rules
+* 160 characters per individual message.
+* Verify, Schedule and Reschedule use two purposeful messages by default when full appointment details are included.
+* Cancel uses one message.
+* Two-message sends end with (1/2) and (2/2).
+* Verify multi-appointment sends use one independent two-message set per appointment.
+* Verify, Schedule and Reschedule include Ascension by name in Message 1.
+* Cancel identifies Ascension through ascension.org and Ascension One app in the same message.
+* Consent and opt-out are handled by Ascension's SMS program.
+* No emoji.
+* SMS copy is declarative, neutral and confirmational.
+
+
+Format Conventions
+* Date: Wed Dec 31. Abbreviated day, abbreviated month, numeric date, no comma, no year unless appointment is more than a year away.
+* Time: 10:20am. 12-hour, lowercase am/pm, no space.
+* Provider: [first] [last], [credential]. No Dr. prefix.
+* Facility: full name as returned from Dash.
+* Address: full street address, no zip.
+* City: sentence case, no state.
+* Map link: [vanity_map].
+* Provider profile link: [vanity_provider].
+
+
+Long-Content Fallback
+For Message 2 in Verify, Schedule or Reschedule, when filled length exceeds 160, drop street address and city. The map URL encodes both.
+
+
+Send Failure Handling
+* Retry once on initial send failure.
+* For two-message sends, retry only failed message or messages.
+* If retry also fails, Grace gives verbal fallback before closing check.
+______________
+VERIFY SMS
+Single appointment uses two messages.
+
+
+Message 1 template:
+Thank you for calling Ascension to request a one-time message regarding your appointment: [provider_full], [date] at [time]. (1/2)
+
+
+Message 2 template:
+Location: [facility_name], [street_address], [city]. For a map, visit [vanity_map]. For info on your provider, [vanity_provider]. (2/2)
+
+
+Message 2 fallback:
+Location: [facility_name]. For a map, visit [vanity_map]. For info on your provider, [vanity_provider]. (2/2)
+
+
+Multi-appointment Verify:
+One SMS set per appointment, chronological order matching voice readback. Do not number across all messages as (1/4) through (4/4).
+______________
+CANCEL SMS
+Message template:
+Here is a one-time confirmation of your cancellation with [provider_full]. To book a new appointment, visit ascension.org or use the Ascension One app.
+
+
+Example:
+Here is a one-time confirmation of your cancellation with Steve Paulsen, MD. To book a new appointment, visit ascension.org or use the Ascension One app.
+
+
+Verbal fallback:
+"The text isn't going through right now. The cancellation is confirmed: the appointment on [date] at [time] with [provider_full] is canceled."
+______________
+SCHEDULE SMS
+Two messages. Same template as Verify, with "regarding your appointment" referring to the appointment just booked.
+
+
+Message 1 template:
+Thank you for calling Ascension to request a one-time message regarding your appointment: [provider_full], [date] at [time]. (1/2)
+
+
+Message 2 template:
+Location: [facility_name], [street_address], [city]. For a map, visit [vanity_map]. For info on your provider, [vanity_provider]. (2/2)
+
+
+Message 2 fallback:
+Location: [facility_name]. For a map, visit [vanity_map]. For info on your provider, [vanity_provider]. (2/2)
+
+
+Voice offer:
+"A confirmation can be sent by text with a map to the facility and a link to [provider_full]'s profile. Send it now?"
+______________
+RESCHEDULE SMS
+Two messages. Same Message 2 as Verify and Schedule. Message 1 names the rescheduled appointment when provider name length allows it.
+
+
+Message 1 template:
+Thank you for calling Ascension to request a one-time message regarding your rescheduled appointment: [provider_full], [date] at [time]. (1/2)
+
+
+Message 1 fallback for long provider names:
+Thank you for calling Ascension to request a one-time message regarding your appointment: [provider_full], [date] at [time]. (1/2)
+
+
+Use fallback when [provider_full] exceeds 28 characters.
+
+
+Message 2 template:
+Location: [facility_name], [street_address], [city]. For a map, visit [vanity_map]. For info on your provider, [vanity_provider]. (2/2)
+
+
+Message 2 fallback:
+Location: [facility_name]. For a map, visit [vanity_map]. For info on your provider, [vanity_provider]. (2/2)
+
+
+Voice offer:
+"A confirmation can be sent by text with a map to the facility and a link to [provider_full]'s profile. Send it now?"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+________________
+
+
+Open Items
+* Emergency wording still needs compliance approval. Current direction: offer emergency care as an option, not a directive, then confirm caller is safe to continue.
+* “On Behalf Of” flow is still pending. Until it ships, proxy caller and patient-switch cases transfer to Care Navigator.
+* Confirm engineering can support the date-of-birth-only third attempt while holding the captured name from the prior attempt.
+* Date format rule: if appointment is more than a year away, say the year or "next year." Otherwise use Wed Dec 31 format.
+* Schedule and Reschedule now include the elimination-reason guardrail: do not speak Dash elimination reasons to callers. Log internally.
+* Cancel now includes the Phase 1 scope check before offering reschedule.
+________________
+
+
+Corrections Applied In This Library: June 2026
+* Schedule SMS first-visit branching removed.
+* Schedule STEP 14 collapsed to one SMS offer with both links for every caller.
+* SMS retry and verbal fallback added to main flow bodies.
+* Shared non-survey closing standardized as "Thank you for choosing Ascension, [first name]."
+* Live transfer line standardized as "A Care Navigator can help with this. Connecting you now."
+* Proxy caller V1 transfer rule added consistently.
+* Authentication standard updated across flows: three failed attempts total, then Care Navigator transfer.
